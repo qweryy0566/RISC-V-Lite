@@ -1,6 +1,7 @@
 #ifndef RISC_V_TOOLS_HPP_
 #define RISC_V_TOOLS_HPP_
 
+#include <iostream>
 #include <unordered_map>
 
 enum TYPE {
@@ -122,5 +123,29 @@ Instruct Decode(unsigned code) {
   }
   return res;
 }
+
+template <class T, int SIZE = 32>
+class CircQueue {
+  T q[SIZE + 1]{};
+  int hd{1}, tl{1};
+
+  static int Add(const int &x) {
+    return x == SIZE ? 1 : x + 1;
+  }
+
+ public:
+  T &operator[](const int &i) { return q[i]; }
+  bool Full() const { return Add(tl) == hd; }
+  bool Empty() const { return hd == tl; }
+  bool Push(const T &x) {
+    return Full() ? 0 : (q[tl = Add(tl)] = x, 1);
+  }
+  T Top() const { return q[Add(hd)]; }
+  bool Pop() {
+    return Empty() ? 0 : (hd = Add(hd), 1);
+  }
+  void Clear() { hd = tl = 1; }
+  int Next() const { return Add(tl); }
+};
 
 #endif  // RISC_V_TOOLS_HPP_
