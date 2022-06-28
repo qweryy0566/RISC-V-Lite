@@ -1,6 +1,7 @@
 #ifndef RISC_V_TOOLS_HPP_
 #define RISC_V_TOOLS_HPP_
 
+#include <cstring>
 #include <iostream>
 #include <unordered_map>
 
@@ -68,11 +69,11 @@ std::unordered_map<unsigned, TYPE> to_type{
 std::unordered_map<unsigned, char> imm_type{
     {0b0110111, 'U'}, {0b0010111, 'U'}, {0b1101111, 'J'},
     {0b1100111, 'I'}, {0b1100011, 'B'}, {0b0000011, 'I'},
-    {0b0100011, 'S'}, {0b0010011, 'I'}, {0b0110011, '\0'}};
+    {0b0100011, 'S'}, {0b0010011, 'I'}, {0b0110011, 'R'}};
 
 struct Instruct {
   TYPE type;
-  unsigned rs1, rs2, rd, imm;
+  unsigned rs1{0}, rs2{0}, rd{0}, imm{0};
 };
 
 // 将一个 (beg+1) 位的符号数扩展为一个 32 位符号数。
@@ -97,29 +98,39 @@ Instruct Decode(unsigned code) {
       funct7 = get(code, 31, 25);
   }
   res.type = to_type[(funct7 << 3 | funct3) << 7 | opcode];
-  res.rd = get(code, 11, 7);
-  res.rs1 = get(code, 19, 15);
-  res.rs2 = get(code, 24, 20);
   switch (imm_type[opcode]) {
     case 'U':
       res.imm = get(code, 31, 12) << 12;
+      res.rd = get(code, 11, 7);
       break;
     case 'J':
       res.imm =
           sign_extend(get(code, 31, 31) << 20 | get(code, 19, 12) << 12 |
                           get(code, 20, 20) << 11 | get(code, 30, 21) << 1,
                       20);
+      res.rd = get(code, 11, 7);
       break;
     case 'I':
       res.imm = sign_extend(get(code, 31, 20), 11);
+      res.rd = get(code, 11, 7);
+      res.rs1 = get(code, 19, 15);
       break;
     case 'S':
       res.imm = sign_extend(get(code, 31, 25) << 5 | get(code, 11, 7), 11);
+      res.rs1 = get(code, 19, 15);
+      res.rs2 = get(code, 24, 20);
       break;
     case 'B':
       res.imm = sign_extend(get(code, 31, 31) << 12 | get(code, 7, 7) << 11 |
                                 get(code, 30, 25) << 5 | get(code, 11, 8) << 1,
                             12);
+      res.rs1 = get(code, 19, 15);
+      res.rs2 = get(code, 24, 20);
+      break;
+    case 'R':
+      res.rd = get(code, 11, 7);
+      res.rs1 = get(code, 19, 15);
+      res.rs2 = get(code, 24, 20);
   }
   return res;
 }
@@ -140,7 +151,8 @@ class CircQueue {
   bool Push(const T &x) {
     return Full() ? 0 : (q[tl = Add(tl)] = x, 1);
   }
-  T Top() const { return q[Add(hd)]; }
+  unsigned TopId() const { return hd; }
+  T &Top() { return q[Add(hd)]; }
   bool Pop() {
     return Empty() ? 0 : (hd = Add(hd), 1);
   }

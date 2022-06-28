@@ -1,6 +1,6 @@
-#include "cpu.hpp"
+#include "cpu_premium.hpp"
 
-CPU cpu;
+CPU_PREM cpu;
 
 int main() {
   cpu.Load();
