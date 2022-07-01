@@ -268,6 +268,9 @@ class CPU_PREM {
     */
     slb_to_rob.is_stall = 1;
     slb_to_rs.is_stall = 1;
+    if (!issue_to_slb.is_stall) {
+      SLB_out.Push(issue_to_slb.to_SLB);
+    }
     if (MA.isBusy) {
       --MA.last_time;
       if (!MA.last_time) {
@@ -308,6 +311,13 @@ class CPU_PREM {
                       mem[MA.opt.Vj + MA.opt.A + 1] << 8;
               break;
           }
+          for (int i = 1; i <= QUEUE_SIZE; ++i) {
+            if (!SLB_out[i].isBusy) continue;
+            if (SLB_out[i].Qj == MA.opt.dest)
+              SLB_out[i].Qj = 0, SLB_out[i].Vj = value;
+            if (SLB_out[i].Qk == MA.opt.dest)
+              SLB_out[i].Qk = 0, SLB_out[i].Vk = value;
+          }
           slb_to_rob.is_stall = slb_to_rs.is_stall = 0;
           slb_to_rob.res.in_rob = slb_to_rs.res.in_rob = MA.opt.dest;
           slb_to_rob.res.value = slb_to_rs.res.value = value;
@@ -319,9 +329,6 @@ class CPU_PREM {
     if (commit_need_clear) {
       SLB_out.Clear(), MA.isBusy = 0;
       return;
-    }
-    if (!issue_to_slb.is_stall) {
-      SLB_out.Push(issue_to_slb.to_SLB);
     }
     // 共享主线 public。
     if (!exec_to_rs.is_stall)
@@ -403,6 +410,7 @@ class CPU_PREM {
     if (to_issue.inst.type >= JAL && to_issue.inst.type <= BGEU)
       stall = 1;
     else pc += 4;
+    // std::cerr << ToStr(to_issue.inst.type) << '\n';
   }
 
  public:
@@ -420,8 +428,8 @@ class CPU_PREM {
     for (;; ++clk) {
       RunRob();
       RunRs();
-      RunSlb();
       RunReg();
+      RunSlb();
       Update();
       Execute();
       RunInQueue();
