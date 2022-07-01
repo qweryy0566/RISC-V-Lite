@@ -6,7 +6,7 @@
 
 class CPU_PREM {
   uint8_t mem[1 << 20];
-  unsigned pc{0};
+  unsigned pc{0}, clk{0};
   class Register {
     unsigned arr[32]{0}, fake, reorder[32]{0};
 
@@ -14,7 +14,10 @@ class CPU_PREM {
     unsigned &operator[](const int &i) { return i ? arr[i] : fake = 0; }
     unsigned &Reorder(const int &i) { return i ? reorder[i] : fake = 0; }
     void Clear() { memset(reorder, 0, sizeof(reorder)); }
-
+    friend std::ostream &operator<<(std::ostream &out, const Register &x) {
+      for (int i = 0; i < 32; ++i) out << i << ": " << x.arr[i] << '\n';
+      return out;
+    }
   } reg_in, reg_out;
 
   ReservationStation RS_in, RS_out;
@@ -28,6 +31,7 @@ class CPU_PREM {
   CDB slb_to_rob, slb_to_rs;
   CDB to_commit, commit_to_reg, commit_to_slb;
   bool commit_need_clear{0};  // broadcast
+  bool stall{0}, debug{0};
 
   void Issue() {
     issue_to_reg.is_stall = 1;
@@ -37,12 +41,14 @@ class CPU_PREM {
     if (to_issue.is_stall) return;
     // 将对应指令放到 RS 与 ROB 中.
     Instruct inst = to_issue.inst;
+    issue_to_rob.is_stall = 0;
     issue_to_rob.to_ROB = {inst.type, 1, 0, inst.rd, 0};
     RSElement send;
     send.type = inst.type;
     send.A = inst.imm;
     send.isBusy = 1;
     send.dest = ROB_in.Next();
+    send.cur_pc = to_issue.cur_pc;
     if (reg_in.Reorder(inst.rs1))
       if (ROB_in[reg_in.Reorder(inst.rs1)].isReady)
         send.Vj = ROB_in[reg_in.Reorder(inst.rs1)].value, send.Qj = 0;
@@ -61,11 +67,9 @@ class CPU_PREM {
     issue_to_reg.to_reg = {inst.rd, 0, send.dest};
 
     if (LB <= inst.type && inst.type <= SW) {
-      issue_to_slb.cur_pc = to_issue.cur_pc;
       issue_to_slb.to_SLB = send;
       issue_to_slb.is_stall = 0;
     } else {
-      issue_to_rs.cur_pc = to_issue.cur_pc;
       issue_to_rs.to_RS = send;
       issue_to_rs.is_stall = 0;
     }
@@ -94,32 +98,33 @@ class CPU_PREM {
       case BEQ:
         to_pc = to_execute.to_exec.Vj == to_execute.to_exec.Vk
                     ? to_execute.to_exec.A + to_execute.cur_pc
-                    : -1;
+                    : to_execute.cur_pc + 4;
         break;
       case BNE:
         to_pc = to_execute.to_exec.Vj != to_execute.to_exec.Vk
                     ? to_execute.to_exec.A + to_execute.cur_pc
-                    : -1;
+                    : to_execute.cur_pc + 4;
         break;
       case BLT:
         to_pc = (int)to_execute.to_exec.Vj < (int)to_execute.to_exec.Vk
                     ? to_execute.to_exec.A + to_execute.cur_pc
-                    : -1;
+                    : to_execute.cur_pc + 4;
         break;
       case BGE:
         to_pc = (int)to_execute.to_exec.Vj >= (int)to_execute.to_exec.Vk
                     ? to_execute.to_exec.A + to_execute.cur_pc
-                    : -1;
+                    : to_execute.cur_pc + 4;
         break;
       case BLTU:
+        // std::cerr << "## " << to_execute.to_exec.Vj << ' ' << to_execute.to_exec.Vk << '\n';
         to_pc = to_execute.to_exec.Vj < to_execute.to_exec.Vk
                     ? to_execute.to_exec.A + to_execute.cur_pc
-                    : -1;
+                    : to_execute.cur_pc + 4;
         break;
       case BGEU:
         to_pc = to_execute.to_exec.Vj >= to_execute.to_exec.Vk
                     ? to_execute.to_exec.A + to_execute.cur_pc
-                    : -1;
+                    : to_execute.cur_pc + 4;
         break;
       case ADDI:
         value = to_execute.to_exec.Vj + to_execute.to_exec.A;
@@ -190,21 +195,24 @@ class CPU_PREM {
     commit_to_slb.is_stall = 1;
     commit_need_clear = 0;
     if (!to_commit.is_stall) {
+      // std::cerr << ToStr(to_commit.to_com.type) << '\n';
       switch (to_commit.to_com.type) {
-        case JAL ... JALR:
-          pc = to_commit.to_com.to_pc, commit_need_clear = 1;
-          break;
         case BEQ ... BGEU:
           if (~to_commit.to_com.to_pc)
-            pc = to_commit.to_com.to_pc, commit_need_clear = 1;
+            pc = to_commit.to_com.to_pc, commit_need_clear = 1, stall = 0;
+          ROB_out.Pop();
           break;
         case SB ... SW:
           commit_to_slb.is_stall = 0;
           break;
         case HALT:
-          std::cout << (reg_in[10] & 255u) << '\n';
+          std::cout << std::dec << (reg_in[10] & 255u) << '\n';
           exit(0);
+        case JAL ... JALR:
+          pc = to_commit.to_com.to_pc, commit_need_clear = 1, stall = 0;
         default:
+          ROB_out.Pop();
+          commit_to_reg.is_stall = 0;
           commit_to_reg.to_reg.Q = to_commit.to_com.in_rob;
           commit_to_reg.to_reg.index = to_commit.to_com.dest;
           commit_to_reg.to_reg.value = to_commit.to_com.value;
@@ -237,13 +245,16 @@ class CPU_PREM {
       ROB_out[i].isReady = 1;
       ROB_out[i].value = slb_to_rob.res.value;
     }
-    if (ROB_in.Top().isReady) {
+    if (!ROB_in.Empty() && ROB_in.Top().isReady && ROB_in.Top().isBusy) {
+      to_commit.is_stall = 0;
       to_commit.to_com = {ROB_in.Top().type, ROB_in.Top().dest,
                           ROB_in.Top().value, ROB_in.Top().to_pc,
                           ROB_in.TopId()};
-      ROB_out.Pop();
+      ROB_out.Top().isBusy = 0;
     }
-    if (!issue_to_rob.is_stall) ROB_out.Push(issue_to_rob.to_ROB);
+    if (!issue_to_rob.is_stall) {
+      ROB_out.Push(issue_to_rob.to_ROB);
+    }
   }
   void RunSlb() {
     /*
@@ -257,22 +268,22 @@ class CPU_PREM {
     */
     slb_to_rob.is_stall = 1;
     slb_to_rs.is_stall = 1;
-    if (commit_need_clear) {
-      SLB_out.Clear(), MA.isBusy = 0;
-      return;
-    }
-    if (!issue_to_slb.is_stall)
-      SLB_out.Push(issue_to_slb.to_SLB);
     if (MA.isBusy) {
       --MA.last_time;
       if (!MA.last_time) {
         if (MA.opt.type == SB)
-          mem[MA.opt.A] = MA.opt.Vk;
-        else if (MA.opt.type == SH)
-          *(uint16_t *)(mem + MA.opt.A) = MA.opt.Vk;
-        else if (MA.opt.type == SW)
-          *(uint32_t *)(mem + MA.opt.A) = MA.opt.Vk;
-        else {
+          ROB_out.Pop(), mem[MA.opt.Vj + MA.opt.A] = MA.opt.Vk;
+        else if (MA.opt.type == SH) {
+          ROB_out.Pop();
+          mem[MA.opt.Vj + MA.opt.A] = MA.opt.Vk;
+          mem[MA.opt.Vj + MA.opt.A + 1] = MA.opt.Vk >> 8;
+        } else if (MA.opt.type == SW) {
+          ROB_out.Pop();
+          mem[MA.opt.Vj + MA.opt.A] = MA.opt.Vk;
+          mem[MA.opt.Vj + MA.opt.A + 1] = MA.opt.Vk >> 8;
+          mem[MA.opt.Vj + MA.opt.A + 2] = MA.opt.Vk >> 16;
+          mem[MA.opt.Vj + MA.opt.A + 3] = MA.opt.Vk >> 24;
+        } else {
           int value;
           switch (MA.opt.type) {
             case LB:
@@ -280,31 +291,52 @@ class CPU_PREM {
               break;
             case LH:
               value =
-                  sign_extend(*(uint16_t *)(mem + MA.opt.Vj + MA.opt.A), 15);
+                  sign_extend(mem[MA.opt.Vj + MA.opt.A] |
+                              mem[MA.opt.Vj + MA.opt.A + 1] << 8, 15);
               break;
             case LW:
-              value = *(uint32_t *)(mem + MA.opt.Vj + MA.opt.A);
+              value = mem[MA.opt.Vj + MA.opt.A] |
+                      mem[MA.opt.Vj + MA.opt.A + 1] << 8 |
+                      mem[MA.opt.Vj + MA.opt.A + 2] << 16 |
+                      mem[MA.opt.Vj + MA.opt.A + 3] << 24;
               break;
             case LBU:
               value = mem[MA.opt.Vj + MA.opt.A];
               break;
             case LHU:
-              value = *(uint16_t *)(mem + MA.opt.Vj + MA.opt.A);
+              value = mem[MA.opt.Vj + MA.opt.A] |
+                      mem[MA.opt.Vj + MA.opt.A + 1] << 8;
               break;
           }
           slb_to_rob.is_stall = slb_to_rs.is_stall = 0;
           slb_to_rob.res.in_rob = slb_to_rs.res.in_rob = MA.opt.dest;
           slb_to_rob.res.value = slb_to_rs.res.value = value;
         }
-        SLB_out.Pop();
+        SLB_out.Pop();  // 执行结束后才会退队。
         MA.isBusy = 0;
       }
     }
+    if (commit_need_clear) {
+      SLB_out.Clear(), MA.isBusy = 0;
+      return;
+    }
+    if (!issue_to_slb.is_stall) {
+      SLB_out.Push(issue_to_slb.to_SLB);
+    }
+    // 共享主线 public。
+    if (!exec_to_rs.is_stall)
+      for (int i = 1; i <= QUEUE_SIZE; ++i) {
+        if (!SLB_out[i].isBusy) continue;
+        if (SLB_out[i].Qj == exec_to_rs.res.in_rob)
+          SLB_out[i].Qj = 0, SLB_out[i].Vj = exec_to_rs.res.value;
+        if (SLB_out[i].Qk == exec_to_rs.res.in_rob)
+          SLB_out[i].Qk = 0, SLB_out[i].Vk = exec_to_rs.res.value;
+      }
     if (!SLB_in.Empty()) {
       if (SLB_in.Top().isBusy && !SLB_in.Top().Qj && !SLB_in.Top().Qk) {
         if (SLB_in.Top().type >= SB) {  // store
+          slb_to_rob.is_stall = 0;
           slb_to_rob.res.in_rob = SLB_in.Top().dest;
-          slb_to_rob.res.value = SLB_in.Top().Vj + SLB_in.Top().A;
           SLB_out.Top().isBusy = 0;
         } else if (!MA.isBusy) {
           MA.Add(SLB_in.Top()), SLB_out.Top().isBusy = 0;
@@ -315,14 +347,6 @@ class CPU_PREM {
           MA.Add(SLB_in.Top()), SLB_out.Top().isReady = 0;
       }
     }
-    if (!exec_to_rs.is_stall)
-      for (int i = 1; i <= QUEUE_SIZE; ++i) {
-        if (!SLB_in[i].isBusy) continue;
-        if (SLB_in[i].Qj == exec_to_rs.res.in_rob)
-          SLB_out[i].Qj = 0, SLB_out[i].Vj = exec_to_rs.res.value;
-        if (SLB_in[i].Qk == exec_to_rs.res.in_rob)
-          SLB_out[i].Qk = 0, SLB_out[i].Vk = exec_to_rs.res.value;
-      }
   }
   void RunRs() {
     to_execute.is_stall = 1;
@@ -334,50 +358,51 @@ class CPU_PREM {
     int i = RS_out.Check();
     if (i) {
       to_execute.is_stall = 0;
-      to_execute.cur_pc = issue_to_rs.cur_pc;
+      to_execute.cur_pc = RS_out[i].cur_pc;
       to_execute.to_exec = RS_out[i];
       RS_out[i].isBusy = 0;
     }
     if (!exec_to_rs.is_stall)
       for (int i = 1; i <= QUEUE_SIZE; ++i) {
-        if (!RS_in[i].isBusy) continue;
-        if (RS_in[i].Qj == exec_to_rs.res.in_rob)
+        if (!RS_out[i].isBusy) continue;
+        if (RS_out[i].Qj == exec_to_rs.res.in_rob)
           RS_out[i].Qj = 0, RS_out[i].Vj = exec_to_rs.res.value;
-        if (RS_in[i].Qk == exec_to_rs.res.in_rob)
+        if (RS_out[i].Qk == exec_to_rs.res.in_rob)
           RS_out[i].Qk = 0, RS_out[i].Vk = exec_to_rs.res.value;
       }
     if (!slb_to_rs.is_stall)
       for (int i = 1; i <= QUEUE_SIZE; ++i) {
-        if (!RS_in[i].isBusy) continue;
-        if (RS_in[i].Qj == slb_to_rs.res.in_rob)
+        if (!RS_out[i].isBusy) continue;
+        if (RS_out[i].Qj == slb_to_rs.res.in_rob)
           RS_out[i].Qj = 0, RS_out[i].Vj = slb_to_rs.res.value;
-        if (RS_in[i].Qk == slb_to_rs.res.in_rob)
+        if (RS_out[i].Qk == slb_to_rs.res.in_rob)
           RS_out[i].Qk = 0, RS_out[i].Vk = slb_to_rs.res.value;
       }
   }
   void RunReg() {
-    if (commit_need_clear) {
-      reg_out.Clear();
-      return;
-    }
     if (!commit_to_reg.is_stall) {
       int index = commit_to_reg.to_reg.index;
       if (commit_to_reg.to_reg.Q == reg_in.Reorder(index))
         reg_out.Reorder(index) = 0;
       reg_out[index] = commit_to_reg.to_reg.value;
+// std::cerr << "index = " << index << ", a0 = " << std::dec << reg_out[10] << '\n';
     }
     if (!issue_to_reg.is_stall)
       reg_out.Reorder(issue_to_reg.to_reg.index) = issue_to_reg.to_reg.Q;
+    if (commit_need_clear) reg_out.Clear();
   }
   void RunInQueue() {
     // 在这里判断是否可以发送指令，否则 stall.
     to_issue.is_stall = 0;
-    if (RS_in.Full() || ROB_in.Full() || SLB_in.Full()) {
+    if (RS_in.Full() || ROB_in.Full() || SLB_in.Full() || stall) {
       to_issue.is_stall = 1;
-      return;
+      return;  // TODO : 待机条件太严格。
     }
     to_issue.cur_pc = pc;
-    to_issue.inst = Decode(*(unsigned *)(mem + pc)), pc += 4;
+    to_issue.inst = Decode(*(unsigned *)(mem + pc));
+    if (to_issue.inst.type >= JAL && to_issue.inst.type <= BGEU)
+      stall = 1;
+    else pc += 4;
   }
 
  public:
@@ -392,16 +417,14 @@ class CPU_PREM {
   }
 
   void Run() {
-    int clk = 0;
     for (;; ++clk) {
-      Update();
       RunRob();
-      RunSlb();
       RunRs();
+      RunSlb();
       RunReg();
-      RunInQueue();
-
+      Update();
       Execute();
+      RunInQueue();
       Issue();
       Commit();
     }

@@ -71,14 +71,144 @@ std::unordered_map<unsigned, char> imm_type{
     {0b1100111, 'I'}, {0b1100011, 'B'}, {0b0000011, 'I'},
     {0b0100011, 'S'}, {0b0010011, 'I'}, {0b0110011, 'R'}};
 
+std::string ToStr(TYPE type) {
+  std::string ret;
+  switch (type) {
+    case HALT:
+      ret = "HALT ";
+      break;
+    case LUI:
+      ret = "LUI ";
+      break;
+    case AUIPC:
+      ret = "AUIPC ";
+      break;
+    case JAL:
+      ret = "JAL ";
+      break;
+    case JALR:
+      ret = "JALR ";
+      break;
+    case BEQ:
+      ret = "BEQ ";
+      break;
+    case BNE:
+      ret = "BNE ";
+      break;
+    case BLT:
+      ret = "BLT ";
+      break;
+    case BGE:
+      ret = "BGE ";
+      break;
+    case BLTU:
+      ret = "BLTU ";
+      break;
+    case BGEU:
+      ret = "BGEU ";
+      break;
+    case LB:
+      ret = "LB ";
+      break;
+    case LH:
+      ret = "LH ";
+      break;
+    case LW:
+      ret = "LW ";
+      break;
+    case LBU:
+      ret = "LBU ";
+      break;
+    case LHU:
+      ret = "LHU ";
+      break;
+    case SB:
+      ret = "SB ";
+      break;
+    case SH:
+      ret = "SH ";
+      break;
+    case SW:
+      ret = "SW ";
+      break;
+    case ADDI:
+      ret = "ADDI ";
+      break;
+    case SLTI:
+      ret = "SLTI ";
+      break;
+    case SLTIU:
+      ret = "SLTIU ";
+      break;
+    case XORI:
+      ret = "XORI ";
+      break;
+    case ORI:
+      ret = "ORI ";
+      break;
+    case ANDI:
+      ret = "ANDI ";
+      break;
+    case SLLI:
+      ret = "SLLI ";
+      break;
+    case SRLI:
+      ret = "SRLI ";
+      break;
+    case SRAI:
+      ret = "SRAI ";
+      break;
+    case ADD:
+      ret = "ADD ";
+      break;
+    case SUB:
+      ret = "SUB ";
+      break;
+    case SLL:
+      ret = "SLL ";
+      break;
+    case SLT:
+      ret = "SLT ";
+      break;
+    case SLTU:
+      ret = "SLTU ";
+      break;
+    case XOR:
+      ret = "XOR ";
+      break;
+    case SRL:
+      ret = "SRL ";
+      break;
+    case SRA:
+      ret = "SRA ";
+      break;
+    case OR:
+      ret = "OR ";
+      break;
+    case AND:
+      ret = "AND ";
+      break;
+  }
+  return ret;
+}
+
+bool IsJump(const TYPE &type) {
+  return type >= JAL && type <= BGEU;
+}
+
 struct Instruct {
   TYPE type;
   unsigned rs1{0}, rs2{0}, rd{0}, imm{0};
+  friend std::ostream &operator<<(std::ostream &out, const Instruct &x) {
+    out << ToStr(x.type);
+    out << x.rs1 << ' ' << x.rs2 << ' ' << x.rd << ' ' << std::dec << (int)x.imm << '\n';
+    return out;
+  }
 };
 
 // 将一个 (beg+1) 位的符号数扩展为一个 32 位符号数。
 unsigned sign_extend(unsigned x, int beg) {
-  return x >> beg  ? -1 ^ (1u << beg) - 1 | x : x;
+  return x >> beg ? -1 ^ (1u << beg) - 1 | x : x;
 }
 unsigned get(unsigned code, unsigned high, unsigned low) {
   return code >> low & (1u << high - low + 1) - 1u;
@@ -138,23 +268,23 @@ Instruct Decode(unsigned code) {
 template <class T, int SIZE = 32>
 class CircQueue {
   T q[SIZE + 1]{};
-  int hd{1}, tl{1};
 
-  static int Add(const int &x) {
-    return x == SIZE ? 1 : x + 1;
-  }
+  static int Add(const int &x) { return x == SIZE ? 1 : x + 1; }
 
  public:
+  int hd{1}, tl{1};
   T &operator[](const int &i) { return q[i]; }
   bool Full() const { return Add(tl) == hd; }
   bool Empty() const { return hd == tl; }
   bool Push(const T &x) {
-    return Full() ? 0 : (q[tl = Add(tl)] = x, 1);
+    if (Full()) throw 1;
+    return q[tl = Add(tl)] = x, 1; 
   }
-  unsigned TopId() const { return hd; }
+  unsigned TopId() const { return Add(hd); }
   T &Top() { return q[Add(hd)]; }
   bool Pop() {
-    return Empty() ? 0 : (hd = Add(hd), 1);
+    if (Empty()) throw 'C';
+    return hd = Add(hd), 1;
   }
   void Clear() { hd = tl = 1; }
   int Next() const { return Add(tl); }

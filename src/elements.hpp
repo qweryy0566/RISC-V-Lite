@@ -8,28 +8,31 @@ const int QUEUE_SIZE = 32;
 struct RSElement {
   TYPE type;
   bool isBusy{0};
-  unsigned Vj, Vk, Qj, Qk, dest, A;
+  unsigned Vj, Vk, Qj, Qk, dest, A, cur_pc;
 };
 class ReservationStation {
   RSElement arr[QUEUE_SIZE + 1];
 
  public:
-  int size{0};
   RSElement &operator[](const int &i) { return arr[i]; }
-  bool Full() const { return size == QUEUE_SIZE; }
+  bool Full() const {
+    for (int i = 1; i <= QUEUE_SIZE; ++i)
+      if (!arr[i].isBusy) return 0;
+    return 1;
+  }
   int Add(const RSElement &x) {
     int i = QUEUE_SIZE;
     while (i && arr[i].isBusy) --i;
-    if (i) arr[i] = x, ++size;
+    if (i) arr[i] = x;
     return i;
   }
   int Check() const {
     int i = QUEUE_SIZE;
-    while (i && !arr[i].isBusy && (arr[i].Qj || arr[i].Qk)) --i;
+    for (; i; --i)
+      if (arr[i].isBusy && !arr[i].Qj && !arr[i].Qk) break;
     return i;
   }
   void Clear() {
-    size = 0;
     for (int i = 1; i <= QUEUE_SIZE; ++i) arr[i].isBusy = 0;
   }
 };
@@ -75,8 +78,8 @@ struct ToCommit {
 
 // Common Data Bus
 struct CDB {
-  bool is_stall{0}, need_clean{0};
-  unsigned cur_pc;
+  bool is_stall{1}, need_clean{0};
+  int id, cur_pc;
   Instruct inst;
   ROB to_ROB;
   ToCommit to_com;

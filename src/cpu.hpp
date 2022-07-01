@@ -11,6 +11,10 @@ struct Register {
   unsigned &operator[](const int &i) {
     return i != 0 ? arr[i] : fake = 0;
   }
+  friend std::ostream &operator<<(std::ostream &out, const Register &x) {
+    for (int i = 0; i < 32; ++i) out << i << ": " << x.arr[i] << '\n';
+    return out;
+  }
 };
 
 class CPU {
@@ -33,6 +37,7 @@ class CPU {
       code = mem[reg.pc] | mem[reg.pc + 1] << 8 | mem[reg.pc + 2] << 16 |
              mem[reg.pc + 3] << 24;
       Instruct ins{Decode(code)};
+      std::cerr << ToStr(ins.type) << '\n';
       switch (ins.type) {
         case HALT:
           std::cout << (reg[10] & 255u) << '\n';
@@ -44,10 +49,12 @@ class CPU {
           reg[ins.rd] = ins.imm + reg.pc;
           break;
         case JAL:
+          // std::cerr << "ra = " << reg[1] << '\n';
           reg[ins.rd] = reg.pc + 4;
           need = 0, reg.pc += ins.imm;
           break;
         case JALR:
+          std::cerr << "ra = " << (reg[ins.rs1] + ins.imm & -2) << '\n';
           tmp = reg.pc + 4;
           need = 0, reg.pc = reg[ins.rs1] + ins.imm & -2;
           reg[ins.rd] = tmp;
@@ -69,6 +76,7 @@ class CPU {
             need = 0, reg.pc += ins.imm;
           break;
         case BLTU:
+          // std::cerr << "## " << reg[ins.rs1] << ' '  << reg[ins.rs2] << '\n';
           if (reg[ins.rs1] < reg[ins.rs2])
             need = 0, reg.pc += ins.imm;
           break;
