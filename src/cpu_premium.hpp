@@ -27,7 +27,8 @@ class CPU_PREM {
   void BranchJump(unsigned &to_pc, unsigned cur_pc, bool is_jump,
                   bool need_jump) {
     to_pc = need_jump ? to_execute.to_exec.A + cur_pc : cur_pc + 4;
-    if (is_jump && need_jump) to_pc = -1;
+    if (!(is_jump ^ need_jump)) to_pc = -1;
+    // if (is_jump && need_jump) to_pc = -1;
     if (spec_cnt[cur_pc % MOD] && !need_jump) --spec_cnt[cur_pc % MOD];
     if (spec_cnt[cur_pc % MOD] < 3 && need_jump) ++spec_cnt[cur_pc % MOD];
   }
@@ -411,6 +412,7 @@ class CPU_PREM {
         pc += to_issue.inst.imm;
         break;
       case BEQ ... BGEU:
+        // std::cerr << "# " << std::hex << pc << ' ' << (spec_cnt[pc % MOD] >= 2) << '\n';
         pc += (to_issue.is_jump = spec_cnt[pc % MOD] >= 2) ? to_issue.inst.imm
                                                            : 4;
         break;

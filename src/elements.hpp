@@ -104,7 +104,7 @@ struct MemoryAccess {
   bool isBusy{0};
   int last_time;
 
-  void Add(const SLBElement &x) { isBusy = 1, last_time = 2, opt = x; }
+  void Add(const SLBElement &x) { isBusy = 1, last_time = 3, opt = x; }
 };
 
 #endif  // RISC_V_ELEMENTS_HPP_
