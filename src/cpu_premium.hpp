@@ -7,18 +7,7 @@
 class CPU_PREM {
   uint8_t mem[1 << 20];
   unsigned pc{0}, clk{0};
-  class Register {
-    unsigned arr[32]{0}, fake, reorder[32]{0};
-
-   public:
-    unsigned &operator[](const int &i) { return i ? arr[i] : fake = 0; }
-    unsigned &Reorder(const int &i) { return i ? reorder[i] : fake = 0; }
-    void Clear() { memset(reorder, 0, sizeof(reorder)); }
-    friend std::ostream &operator<<(std::ostream &out, const Register &x) {
-      for (int i = 0; i < 32; ++i) out << i << ": " << x.arr[i] << '\n';
-      return out;
-    }
-  } reg_in, reg_out;
+  Register reg_in, reg_out;
 
   ReservationStation RS_in, RS_out;
 
@@ -31,7 +20,17 @@ class CPU_PREM {
   CDB slb_to_rob, slb_to_rs;
   CDB to_commit, commit_to_reg, commit_to_slb;
   bool commit_need_clear{0};  // broadcast
-  bool stall{0}, debug{0};
+  static const int MOD = 2333;
+  uint8_t spec_cnt[2334]{0};
+  int success{0}, total{0};
+
+  void BranchJump(unsigned &to_pc, unsigned cur_pc, bool is_jump,
+                  bool need_jump) {
+    to_pc = need_jump ? to_execute.to_exec.A + cur_pc : cur_pc + 4;
+    if (is_jump && need_jump) to_pc = -1;
+    if (spec_cnt[cur_pc % MOD] && !need_jump) --spec_cnt[cur_pc % MOD];
+    if (spec_cnt[cur_pc % MOD] < 3 && need_jump) ++spec_cnt[cur_pc % MOD];
+  }
 
   void Issue() {
     issue_to_reg.is_stall = 1;
@@ -49,6 +48,7 @@ class CPU_PREM {
     send.isBusy = 1;
     send.dest = ROB_in.Next();
     send.cur_pc = to_issue.cur_pc;
+    send.is_jump = to_issue.is_jump;
     if (reg_in.Reorder(inst.rs1))
       if (ROB_in[reg_in.Reorder(inst.rs1)].isReady)
         send.Vj = ROB_in[reg_in.Reorder(inst.rs1)].value, send.Qj = 0;
@@ -96,35 +96,28 @@ class CPU_PREM {
         value = to_execute.cur_pc + 4;
         break;
       case BEQ:
-        to_pc = to_execute.to_exec.Vj == to_execute.to_exec.Vk
-                    ? to_execute.to_exec.A + to_execute.cur_pc
-                    : to_execute.cur_pc + 4;
+        BranchJump(to_pc, to_execute.cur_pc, to_execute.is_jump,
+                   to_execute.to_exec.Vj == to_execute.to_exec.Vk);
         break;
       case BNE:
-        to_pc = to_execute.to_exec.Vj != to_execute.to_exec.Vk
-                    ? to_execute.to_exec.A + to_execute.cur_pc
-                    : to_execute.cur_pc + 4;
+        BranchJump(to_pc, to_execute.cur_pc, to_execute.is_jump,
+                   to_execute.to_exec.Vj != to_execute.to_exec.Vk);
         break;
       case BLT:
-        to_pc = (int)to_execute.to_exec.Vj < (int)to_execute.to_exec.Vk
-                    ? to_execute.to_exec.A + to_execute.cur_pc
-                    : to_execute.cur_pc + 4;
+        BranchJump(to_pc, to_execute.cur_pc, to_execute.is_jump,
+                   (int)to_execute.to_exec.Vj < (int)to_execute.to_exec.Vk);
         break;
       case BGE:
-        to_pc = (int)to_execute.to_exec.Vj >= (int)to_execute.to_exec.Vk
-                    ? to_execute.to_exec.A + to_execute.cur_pc
-                    : to_execute.cur_pc + 4;
+        BranchJump(to_pc, to_execute.cur_pc, to_execute.is_jump,
+                   (int)to_execute.to_exec.Vj >= (int)to_execute.to_exec.Vk);
         break;
       case BLTU:
-        // std::cerr << "## " << to_execute.to_exec.Vj << ' ' << to_execute.to_exec.Vk << '\n';
-        to_pc = to_execute.to_exec.Vj < to_execute.to_exec.Vk
-                    ? to_execute.to_exec.A + to_execute.cur_pc
-                    : to_execute.cur_pc + 4;
+        BranchJump(to_pc, to_execute.cur_pc, to_execute.is_jump,
+                   to_execute.to_exec.Vj < to_execute.to_exec.Vk);
         break;
       case BGEU:
-        to_pc = to_execute.to_exec.Vj >= to_execute.to_exec.Vk
-                    ? to_execute.to_exec.A + to_execute.cur_pc
-                    : to_execute.cur_pc + 4;
+        BranchJump(to_pc, to_execute.cur_pc, to_execute.is_jump,
+                   to_execute.to_exec.Vj >= to_execute.to_exec.Vk);
         break;
       case ADDI:
         value = to_execute.to_exec.Vj + to_execute.to_exec.A;
@@ -198,8 +191,11 @@ class CPU_PREM {
       // std::cerr << ToStr(to_commit.to_com.type) << '\n';
       switch (to_commit.to_com.type) {
         case BEQ ... BGEU:
+          ++total;
           if (~to_commit.to_com.to_pc)
-            pc = to_commit.to_com.to_pc, commit_need_clear = 1, stall = 0;
+            pc = to_commit.to_com.to_pc, commit_need_clear = 1;
+          else
+            ++success;
           ROB_out.Pop();
           break;
         case SB ... SW:
@@ -207,9 +203,10 @@ class CPU_PREM {
           break;
         case HALT:
           std::cout << std::dec << (reg_in[10] & 255u) << '\n';
+          std::cerr << std::dec << success << " / " << total << '\n'; 
           exit(0);
-        case JAL ... JALR:
-          pc = to_commit.to_com.to_pc, commit_need_clear = 1, stall = 0;
+        case JALR:
+          pc = to_commit.to_com.to_pc, commit_need_clear = 1;
         default:
           ROB_out.Pop();
           commit_to_reg.is_stall = 0;
@@ -293,9 +290,9 @@ class CPU_PREM {
               value = sign_extend(mem[MA.opt.Vj + MA.opt.A], 7);
               break;
             case LH:
-              value =
-                  sign_extend(mem[MA.opt.Vj + MA.opt.A] |
-                              mem[MA.opt.Vj + MA.opt.A + 1] << 8, 15);
+              value = sign_extend(mem[MA.opt.Vj + MA.opt.A] |
+                                      mem[MA.opt.Vj + MA.opt.A + 1] << 8,
+                                  15);
               break;
             case LW:
               value = mem[MA.opt.Vj + MA.opt.A] |
@@ -307,8 +304,8 @@ class CPU_PREM {
               value = mem[MA.opt.Vj + MA.opt.A];
               break;
             case LHU:
-              value = mem[MA.opt.Vj + MA.opt.A] |
-                      mem[MA.opt.Vj + MA.opt.A + 1] << 8;
+              value = mem[MA.opt.Vj + MA.opt.A] | mem[MA.opt.Vj + MA.opt.A + 1]
+                                                      << 8;
               break;
           }
           for (int i = 1; i <= QUEUE_SIZE; ++i) {
@@ -367,6 +364,7 @@ class CPU_PREM {
       to_execute.is_stall = 0;
       to_execute.cur_pc = RS_out[i].cur_pc;
       to_execute.to_exec = RS_out[i];
+      to_execute.is_jump = RS_out[i].is_jump;
       RS_out[i].isBusy = 0;
     }
     if (!exec_to_rs.is_stall)
@@ -392,7 +390,8 @@ class CPU_PREM {
       if (commit_to_reg.to_reg.Q == reg_in.Reorder(index))
         reg_out.Reorder(index) = 0;
       reg_out[index] = commit_to_reg.to_reg.value;
-// std::cerr << "index = " << index << ", a0 = " << std::dec << reg_out[10] << '\n';
+      // std::cerr << "index = " << index << ", a0 = " << std::dec <<
+      // reg_out[10] << '\n';
     }
     if (!issue_to_reg.is_stall)
       reg_out.Reorder(issue_to_reg.to_reg.index) = issue_to_reg.to_reg.Q;
@@ -401,15 +400,23 @@ class CPU_PREM {
   void RunInQueue() {
     // 在这里判断是否可以发送指令，否则 stall.
     to_issue.is_stall = 0;
-    if (RS_in.Full() || ROB_in.Full() || SLB_in.Full() || stall) {
+    if (RS_in.Full() || ROB_in.Full() || SLB_in.Full()) {
       to_issue.is_stall = 1;
       return;  // TODO : 待机条件太严格。
     }
     to_issue.cur_pc = pc;
     to_issue.inst = Decode(*(unsigned *)(mem + pc));
-    if (to_issue.inst.type >= JAL && to_issue.inst.type <= BGEU)
-      stall = 1;
-    else pc += 4;
+    switch (to_issue.inst.type) {
+      case JAL:
+        pc += to_issue.inst.imm;
+        break;
+      case BEQ ... BGEU:
+        pc += (to_issue.is_jump = spec_cnt[pc % MOD] >= 2) ? to_issue.inst.imm
+                                                           : 4;
+        break;
+      default:
+        pc += 4;
+    }
     // std::cerr << ToStr(to_issue.inst.type) << '\n';
   }
 

@@ -5,9 +5,18 @@
 
 const int QUEUE_SIZE = 32;
 
+class Register {
+  unsigned arr[32]{0}, fake, reorder[32]{0};
+
+ public:
+  unsigned &operator[](const int &i) { return i ? arr[i] : fake = 0; }
+  unsigned &Reorder(const int &i) { return i ? reorder[i] : fake = 0; }
+  void Clear() { memset(reorder, 0, sizeof(reorder)); }
+};
+
 struct RSElement {
   TYPE type;
-  bool isBusy{0};
+  bool isBusy{0}, is_jump{0};
   unsigned Vj, Vk, Qj, Qk, dest, A, cur_pc;
 };
 class ReservationStation {
@@ -78,7 +87,7 @@ struct ToCommit {
 
 // Common Data Bus
 struct CDB {
-  bool is_stall{1}, need_clean{0};
+  bool is_stall{1}, need_clean{0}, is_jump{0};
   int id, cur_pc;
   Instruct inst;
   ROB to_ROB;
