@@ -419,7 +419,7 @@ class CPU_PREM {
       default:
         pc += 4;
     }
-    // std::cerr << ToStr(to_issue.inst.type) << '\n';
+    // std::cerr << "Issue: " << ToStr(to_issue.inst.type) << '\n';
   }
 
  public:
